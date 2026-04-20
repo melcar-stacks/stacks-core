@@ -30,7 +30,7 @@ use wasmtime::Engine;
 
 use super::analysis::{self, ContractAnalysis};
 #[cfg(feature = "clarity-wasm")]
-use super::clarity_wasm::call_function;
+use super::clarity_wasm::{call_function, CostMeter};
 use super::EvalHook;
 use crate::vm::ast::ContractAST;
 use crate::vm::callables::{DefinedFunction, FunctionIdentifier};
@@ -239,6 +239,7 @@ pub struct GlobalContext<'a> {
     pub execution_time_tracker: ExecutionTimeTracker,
     #[cfg(feature = "clarity-wasm")]
     pub engine: Engine,
+    pub cost_meter: CostMeter,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1295,7 +1296,14 @@ impl<'a, 'b> Environment<'a, 'b> {
             .global_context
             .database
             .get_contract_size(contract_identifier)?;
-        runtime_cost(ClarityCostFunction::LoadContract, self, contract_size)?;
+
+        let cost = self
+            .global_context
+            .cost_track
+            .compute_cost(ClarityCostFunction::LoadContract, &[contract_size])?;
+        self.global_context
+            .cost_meter
+            .charge(&CostMeter::from(cost))?;
 
         self.global_context.add_memory(contract_size)?;
 
@@ -1817,6 +1825,7 @@ impl<'a> GlobalContext<'a> {
             execution_time_tracker: ExecutionTimeTracker::NoTracking,
             #[cfg(feature = "clarity-wasm")]
             engine,
+            cost_meter: CostMeter::MIN,
         }
     }
 
