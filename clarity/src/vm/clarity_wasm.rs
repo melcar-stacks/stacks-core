@@ -136,6 +136,8 @@ pub struct ClarityWasmContext<'a, 'b> {
     pub cost_globals: Option<CostGlobals>,
 }
 
+pub mod module_cache;
+
 /// Fuel given to each new store when the engine has fuel metering enabled.
 pub const WASM_FUEL_LIMIT: u64 = u64::MAX;
 
@@ -534,15 +536,14 @@ pub fn initialize_contract(
     let module = init_context
         .contract_context()
         .with_wasm_module(|wasm_module| {
-            Module::new(&engine, wasm_module)
+            module_cache::load_module(&engine, wasm_module)
                 .map_err(|e| VmExecutionError::Wasm(WasmError::UnableToLoadModule(e)))
         })?;
     let mut store = ClarityWasmStore::new(&engine, init_context);
-    let mut linker = Linker::new(&engine);
+    let mut linker = module_cache::host_linker(&engine)?;
 
-    // Link in the host interface functions.
+    // Link in the cost globals of this store.
     link_cost_globals(&mut linker, &mut store)?;
-    link_host_functions(&mut linker)?;
 
     let instance = linker
         .instantiate_and_start(&mut store, &module)
@@ -644,8 +645,12 @@ pub fn call_function<'a>(
 ) -> Result<Value, VmExecutionError> {
     let engine = global_context.engine.clone();
     let module = contract_context.with_wasm_module(|wasm_module| {
-        Module::new(&engine, wasm_module)
-            .map_err(|e| VmExecutionError::Wasm(WasmError::UnableToLoadModule(e)))
+        module_cache::load_contract_module(
+            &engine,
+            &contract_context.contract_identifier,
+            wasm_module,
+        )
+        .map_err(|e| VmExecutionError::Wasm(WasmError::UnableToLoadModule(e)))
     })?;
 
     call_function_with_module(
@@ -711,8 +716,9 @@ pub fn compile_and_call_function<'a>(
     .map_err(|e| VmExecutionError::Wasm(WasmError::WasmGeneratorError(e)))?;
 
     let engine = global_context.engine.clone();
-    let module = Module::new(&engine, &compilation.module)
-        .map_err(|e| VmExecutionError::Wasm(WasmError::UnableToLoadModule(e)))?;
+    let module =
+        module_cache::load_contract_module(&engine, &contract_identifier, &compilation.module)
+            .map_err(|e| VmExecutionError::Wasm(WasmError::UnableToLoadModule(e)))?;
 
     // Complete the contract context for the Wasm runtime: attach the compiled module bytes,
     // which `call_function` loads, and fill in the function return types which the
@@ -773,10 +779,7 @@ fn call_function_with_module<'a>(
             function_name.to_string(),
         ))?;
     let mut store = ClarityWasmStore::new(&engine, context);
-    let mut linker = Linker::new(&engine);
-
-    // Link in the host interface functions.
-    link_host_functions(&mut linker)?;
+    let mut linker = module_cache::host_linker(&engine)?;
 
     let expected_args = func_types.get_arg_types();
     let mut cost_globals = link_cost_globals(&mut linker, &mut store.as_context_mut())?;

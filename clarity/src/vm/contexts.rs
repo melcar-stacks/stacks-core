@@ -1694,9 +1694,7 @@ impl<'a> GlobalContext<'a> {
         epoch_id: StacksEpochId,
     ) -> GlobalContext<'a> {
         #[cfg(feature = "clarity-wasm")]
-        let mut config = wasmi::Config::default();
-        config.consume_fuel(true);
-        let engine = Engine::new(&config);
+        let engine = super::clarity_wasm::module_cache::engine();
 
         GlobalContext {
             database,
